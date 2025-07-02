@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Activity Tracker</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <!-- Initial loading message, replaced by React app once loaded -->
+        <div class="flex items-center justify-center min-h-screen bg-gray-100">
+            <div class="text-xl font-semibold text-gray-700">Loading application...</div>
+        </div>
+    </div>
+
+    <!-- React and ReactDOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX transformation in browser (for development only) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        // Import Auth functions directly
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // Import Firestore functions directly
+        import { getFirestore, collection, addDoc, query, where, onSnapshot, doc, setDoc, getDoc, deleteDoc, collectionGroup, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Determine Firebase Config: Prefer __firebase_config from Canvas environment
+        const firebaseConfig = typeof __firebase_config !== 'undefined'
+            ? JSON.parse(__firebase_config)
+            : {
+                apiKey: "AIzaSyDvW2PlPdVWmuW3-bciamcDJSiyPt6-WZQ",
+                authDomain: "daily-activity-tracker-app.firebaseapp.com",
+                projectId: "daily-activity-tracker-app",
+                storageBucket: "daily-activity-tracker-app.firebasestorage.app",
+                messagingSenderId: "809609509395",
+                appId: "1:809609509395:web:a3930994820a4a43015de6",
+                measurementId: "G-46HNK9B53K"
+            };
+
+        // Global variables for Firebase instances (accessible within App component via closure)
+        window.firebaseApp = initializeApp(firebaseConfig);
+        window.db = getFirestore(window.firebaseApp);
+        window.auth = getAuth(window.firebaseApp);
+
+        // Make Firebase Auth functions globally available for the Babel script
+        window.firebaseAuth = {
+            onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut
+        };
+
+        // Make Firestore functions globally available for the Babel script
+        window.firebaseFirestore = {
+            collection, addDoc, query, where, onSnapshot, doc, setDoc, getDoc, deleteDoc, collectionGroup, getDocs
+        };
+
+        // These are typically provided by the Canvas environment, but for local testing, we'll define them.
+        window.__app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-activity-logger-app';
+        window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        const ReactDOM = window.ReactDOM; // Explicitly get ReactDOM from the window object
+
+        // Use the globally initialized db and auth directly
+        const db = window.db;
+        const auth = window.auth;
+
+        // Destructure Firebase Auth functions from the global object
+        const { onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } = window.firebaseAuth;
+        // Destructure Firestore functions from the global object
+        const { collection, addDoc, query, where, onSnapshot, doc, setDoc, getDoc, deleteDoc, collectionGroup, getDocs } = window.firebaseFirestore;
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-activity-logger-app';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // Corrected: Use initialAuthToken directly
+
+        const ADMIN_MASTER_CODE = 'ADMIN123';
+
+        const App = () => {
+            // Log to confirm App component starts rendering
+            console.log("App component is rendering...");
+
+            const [user, setUser] = useState(null);
+            const [selectedAgency, setSelectedAgency] = useState('');
+            const [selectedSite, setSelectedSite] = useState('');
+            const [activityType, setActivityType] = useState('');
+            const [otherActivityText, setOtherActivityText] = useState('');
+            const [loggedActivities, setLoggedActivities] = useState([]);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [showModal, setShowModal] = useState(false);
+            const [modalMessage, setModalMessage] = useState('');
+            const timerRef = useRef(null);
+
+            const [agencyCodeInput, setAgencyCodeInput] = useState('');
+            const [isAgencySetByCode, setIsAgencySetByCode] = useState(false);
+
+            const [isAdminMode, setIsAdminMode] = useState(false);
+            const [adminAgencyCodeInput, setAdminAgencyCodeInput] = useState('');
+            const [adminAgencyNameInput, setAdminAgencyNameInput] = useState('');
+            const [adminSiteInput, setAdminSiteInput] = useState('');
+            const [adminActivityTypeInput, setAdminActivityTypeInput] = useState('');
+            const [adminActivityTypeCritical, setAdminActivityTypeCritical] = useState(false);
+
+            const [agenciesConfig, setAgenciesConfig] = useState([]);
+            const [sitesConfig, setSitesConfig] = useState({});
+            const [activityTypesConfig, setActivityTypesConfig] = useState([]);
+
+            const [selectedAdminAgency, setSelectedAdminAgency] = useState('');
+
+            const [selectedExportAgency, setSelectedExportAgency] = useState('');
+            const [selectedExportSite, setSelectedExportSite] = useState('');
+            const [isExporting, setIsExporting] = useState(false);
+
+            useEffect(() => {
+                // Use onAuthStateChanged function directly
+                const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+                    if (currentUser) {
+                        setUser(currentUser);
+                        console.log("[DEBUG] User authenticated:", currentUser.uid);
+                    } else {
+                        console.log("[DEBUG] No user found, attempting sign-in...");
+                        try {
+                            if (initialAuthToken) {
+                                // Use signInWithCustomToken function directly
+                                await signInWithCustomToken(auth, initialAuthToken);
+                                console.log("[DEBUG] Signed in with custom token.");
+                            } else {
+                                // Use signInAnonymously function directly
+                                await signInAnonymously(auth);
+                                console.log("[DEBUG] Signed in anonymously.");
+                            }
+                        } catch (customTokenError) {
+                            console.warn("[DEBUG] Custom token sign-in failed, attempting anonymous sign-in:", customTokenError.message);
+                            try {
+                                // Use signInAnonymously function directly
+                                await signInAnonymously(auth);
+                                console.log("[DEBUG] Signed in anonymously after custom token failure.");
+                            } catch (anonymousError) {
+                                console.error("Error signing in (anonymous fallback failed):", anonymousError);
+                                setModalMessage(`Authentication error: ${anonymousError.message}. Please try again.`);
+                                setShowModal(true);
+                            }
+                        }
+                    }
+                    setIsAuthReady(true);
+                    console.log("[DEBUG] isAuthReady set to true.");
+                });
+
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!isAuthReady || !user) {
+                    console.log("[DEBUG] Agencies config listener skipped: isAuthReady or user not ready.");
+                    return;
+                }
+                const agenciesConfigDocPath = `artifacts/${appId}/admin_config/agencies_list`;
+                // Use doc function directly
+                const agenciesConfigDocRef = doc(db, agenciesConfigDocPath);
+                // Use onSnapshot function directly
+                const unsubscribe = onSnapshot(agenciesConfigDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setAgenciesConfig(docSnap.data().agencies || []);
+                    } else {
+                        // Use setDoc function directly
+                        setDoc(agenciesConfigDocRef, { agencies: [] }, { merge: true }).catch(e => console.error("Error initializing agencies_list:", e));
+                        setAgenciesConfig([]);
+                    }
+                }, (error) => {
+                    console.error("Error fetching agencies config:", error);
+                    setModalMessage(`Error loading agency configuration: ${error.message}`);
+                    setShowModal(true);
+                });
+                return () => unsubscribe();
+            }, [isAuthReady, user]);
+
+            useEffect(() => {
+                if (!isAuthReady || !user) {
+                    console.log("[DEBUG] Sites config listener skipped: isAuthReady or user not ready.");
+                    return;
+                }
+                const sitesConfigDocPath = `artifacts/${appId}/admin_config/sites_list`;
+                // Use doc function directly
+                const sitesConfigDocRef = doc(db, sitesConfigDocPath);
+                // Use onSnapshot function directly
+                const unsubscribe = onSnapshot(sitesConfigDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setSitesConfig(docSnap.data().sitesByAgency || {});
+                    } else {
+                        // Use setDoc function directly
+                        setDoc(sitesConfigDocRef, { sitesByAgency: {} }, { merge: true }).catch(e => console.error("Error initializing sites_list:", e));
+                        setSitesConfig({});
+                    }
+                }, (error) => {
+                    console.error("Error fetching sites config:", error);
+                    setModalMessage(`Error loading site configuration: ${error.message}`);
+                    setShowModal(true);
+                });
+                return () => unsubscribe();
+            }, [isAuthReady, user]);
+
+            useEffect(() => {
+                if (!isAuthReady || !user) {
+                    console.log("[DEBUG] Activity types config listener skipped: isAuthReady or user not ready.");
+                    return;
+                }
+                const activityTypesConfigDocPath = `artifacts/${appId}/admin_config/activity_types_list`;
+                // Use doc function directly
+                const activityTypesConfigDocRef = doc(db, activityTypesConfigDocPath);
+                // Use onSnapshot function directly
+                const unsubscribe = onSnapshot(activityTypesConfigDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const fetchedTypes = docSnap.data().activityTypes || [];
+                        const normalizedTypes = fetchedTypes.map(type =>
+                            typeof type === 'string' ? { name: type, critical: false } : type
+                        );
+                        setActivityTypesConfig(normalizedTypes);
+                    } else {
+                        const defaultActivityTypes = [
+                            { name: 'Meeting', critical: false },
+                            { name: 'Documentation', critical: false },
+                            { name: 'Code Review', critical: false },
+                            { name: 'Development', critical: false },
+                            { name: 'Testing', critical: false },
+                            { name: 'Support', critical: false },
+                            { name: 'Training', critical: false },
+                            { name: 'Break', critical: false },
+                            { name: 'Lunch', critical: false }
+                        ];
+                        // Use setDoc function directly
+                        setDoc(activityTypesConfigDocRef, { activityTypes: defaultActivityTypes }, { merge: true }).catch(e => console.error("Error initializing activity_types_list:", e));
+                        setActivityTypesConfig(defaultActivityTypes);
+                    }
+                }, (error) => {
+                    console.error("Error fetching activity types config:", error);
+                    setModalMessage(`Error loading activity types configuration: ${error.message}`);
+                    setShowModal(true);
+                });
+                return () => unsubscribe();
+            }, [isAuthReady, user]);
+
+            useEffect(() => {
+                if (!isAuthReady || !user || !selectedAgency || !selectedSite) {
+                    console.log("[DEBUG] Activity listener skipped: Auth/user/agency/site not ready.");
+                    return;
+                }
+                const userId = user.uid;
+                const activitiesCollectionPath = `artifacts/${appId}/users/${userId}/activities`;
+                // Use collection function directly
+                const activitiesCollectionRef = collection(db, activitiesCollectionPath);
+                // Use query and where functions directly
+                const q = query(
+                    activitiesCollectionRef,
+                    where('agency', '==', selectedAgency),
+                    where('site', '==', selectedSite)
+                );
+                // Use onSnapshot function directly
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const activities = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    activities.sort((a, b) => b.timestamp - a.timestamp);
+                    setLoggedActivities(activities);
+                }, (error) => {
+                    console.error("Error fetching activities:", error);
+                    setModalMessage(`Error loading activities: ${error.message}`);
+                    setShowModal(true);
+                });
+                return () => unsubscribe();
+            }, [isAuthReady, user, selectedAgency, selectedSite]);
+
+            useEffect(() => {
+                if (user && selectedAgency && selectedSite) {
+                    if (timerRef.current) {
+                        clearInterval(timerRef.current);
+                    }
+                    timerRef.current = setInterval(() => {
+                        setModalMessage("Time to log your activity!");
+                        setShowModal(true);
+                    }, 900000);
+                    return () => {
+                        if (timerRef.current) {
+                            clearInterval(timerRef.current);
+                        }
+                    };
+                }
+            }, [user, selectedAgency, selectedSite]);
+
+            const logActivity = async () => {
+                if (!user) {
+                    setModalMessage("Please wait for authentication to complete.");
+                    setShowModal(true);
+                    return;
+                }
+                if (!selectedAgency || !selectedSite) {
+                    setModalMessage("Please ensure an Agency and Site are selected before logging an activity.");
+                    setShowModal(true);
+                    return;
+                }
+                let activityToLog = '';
+                if (activityType === 'Other') {
+                    activityToLog = otherActivityText.trim();
+                } else {
+                    activityToLog = activityType.trim();
+                }
+
+                if (!activityToLog) {
+                    setModalMessage("Activity description cannot be empty. Please select an activity or enter text for 'Other'.");
+                    setShowModal(true);
+                    return;
+                }
+
+                const userId = user.uid;
+                const timestamp = Date.now();
+                const activitiesCollectionPath = `artifacts/${appId}/users/${userId}/activities`;
+
+                try {
+                    // Use addDoc and collection functions directly
+                    await addDoc(collection(db, activitiesCollectionPath), {
+                        agency: selectedAgency,
+                        site: selectedSite,
+                        activity: activityToLog,
+                        timestamp: timestamp,
+                        loggedAt: new Date(timestamp).toLocaleString(),
+                        userId: userId
+                    });
+                    setActivityType('');
+                    setOtherActivityText('');
+                    setModalMessage("Activity logged successfully!");
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    setModalMessage(`Error logging activity: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleAgencyCodeSubmit = () => {
+                const code = agencyCodeInput.trim().toUpperCase();
+                if (code === ADMIN_MASTER_CODE) {
+                    setIsAdminMode(true);
+                    setModalMessage("Admin mode activated!");
+                    setShowModal(true);
+                    setAgencyCodeInput('');
+                    return;
+                }
+                const foundAgency = agenciesConfig.find(a => a.code === code);
+                if (foundAgency) {
+                    setSelectedAgency(foundAgency.name);
+                    setSelectedSite('');
+                    setIsAgencySetByCode(true);
+                    setModalMessage(`Agency set to "${foundAgency.name}" successfully!`);
+                    setShowModal(true);
+                } else {
+                    setModalMessage("Invalid agency code. Please try again.");
+                    setShowModal(true);
+                    setAgencyCodeInput('');
+                }
+            };
+
+            const clearAgencyCode = () => {
+                setSelectedAgency('');
+                setSelectedSite('');
+                setAgencyCodeInput('');
+                setIsAgencySetByCode(false);
+                setModalMessage("Agency code cleared. Please enter a new agency code.");
+                setShowModal(true);
+            };
+
+            const handleLogout = async () => {
+                try {
+                    // Use signOut function directly
+                    await signOut(auth);
+                    setUser(null);
+                    setSelectedAgency('');
+                    setSelectedSite('');
+                    setActivityType('');
+                    setOtherActivityText('');
+                    setLoggedActivities([]);
+                    setIsAgencySetByCode(false);
+                    setIsAdminMode(false);
+                    setModalMessage("You have been logged out.");
+                    setShowModal(true);
+                } catch (error) {
+                    console.error("Error logging out:", error);
+                    setModalMessage(`Error logging out: ${error.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleAddUpdateAgency = async () => {
+                if (!adminAgencyNameInput || !adminAgencyCodeInput) {
+                    setModalMessage("Agency name and code cannot be empty.");
+                    setShowModal(true);
+                    return;
+                }
+                const agencyName = adminAgencyNameInput.trim();
+                const agencyCode = adminAgencyCodeInput.trim().toUpperCase();
+                const existingAgency = agenciesConfig.find(a => a.name === agencyName || a.code === agencyCode);
+                let updatedAgencies;
+                if (existingAgency) {
+                    updatedAgencies = agenciesConfig.map(a =>
+                        a.name === agencyName || a.code === agencyCode ? { name: agencyName, code: agencyCode } : a
+                    );
+                    setModalMessage(`Agency "${agencyName}" updated.`);
+                } else {
+                    updatedAgencies = [...agenciesConfig, { name: agencyName, code: agencyCode }];
+                    setModalMessage(`Agency "${agencyName}" added.`);
+                }
+                try {
+                    const agenciesConfigDocPath = `artifacts/${appId}/admin_config/agencies_list`;
+                    // Use doc and setDoc functions directly
+                    const agenciesConfigDocRef = doc(db, agenciesConfigDocPath);
+                    await setDoc(agenciesConfigDocRef, { agencies: updatedAgencies });
+                    setAdminAgencyNameInput('');
+                    setAdminAgencyCodeInput('');
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error adding/updating agency:", e);
+                    setModalMessage(`Error adding/updating agency: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleDeleteAgency = async (agencyToDelete) => {
+                const updatedAgencies = agenciesConfig.filter(a => a.name !== agencyToDelete.name);
+                const agenciesConfigDocPath = `artifacts/${appId}/admin_config/agencies_list`;
+                // Use doc and setDoc functions directly
+                const agenciesConfigDocRef = doc(db, agenciesConfigDocPath);
+                try {
+                    await setDoc(agenciesConfigDocRef, { agencies: updatedAgencies });
+                    const updatedSitesConfig = { ...sitesConfig };
+                    delete updatedSitesConfig[agencyToDelete.name];
+                    const sitesConfigDocPath = `artifacts/${appId}/admin_config/sites_list`;
+                    // Use doc and setDoc functions directly
+                    const sitesConfigDocRef = doc(db, sitesConfigDocPath);
+                    await setDoc(sitesConfigDocRef, { sitesByAgency: updatedSitesConfig });
+                    setSelectedAdminAgency('');
+                    setModalMessage(`Agency "${agencyToDelete.name}" and its sites deleted.`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error deleting agency:", e);
+                    setModalMessage(`Error deleting agency: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleAddSite = async () => {
+                if (!selectedAdminAgency || !adminSiteInput) {
+                    setModalMessage("Please select an agency and enter a site name.");
+                    setShowModal(true);
+                    return;
+                }
+                const newSite = adminSiteInput.trim();
+                const currentSites = sitesConfig[selectedAdminAgency] || [];
+                if (currentSites.includes(newSite)) {
+                    setModalMessage("Site already exists for this agency.");
+                    setShowModal(true);
+                    return;
+                }
+                const updatedSites = [...currentSites, newSite];
+                const updatedSitesConfig = {
+                    ...sitesConfig,
+                    [selectedAdminAgency]: updatedSites
+                };
+                const sitesConfigDocPath = `artifacts/${appId}/admin_config/sites_list`;
+                // Use doc and setDoc functions directly
+                const sitesConfigDocRef = doc(db, sitesConfigDocPath);
+                try {
+                    await setDoc(sitesConfigDocRef, { sitesByAgency: updatedSitesConfig });
+                    setAdminSiteInput('');
+                    setModalMessage(`Site "${newSite}" added to "${selectedAdminAgency}".`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error adding site:", e);
+                    setModalMessage(`Error adding site: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleDeleteSite = async (siteToDelete) => {
+                if (!selectedAdminAgency) return;
+                const currentSites = sitesConfig[selectedAdminAgency] || [];
+                const updatedSites = currentSites.filter(site => site !== siteToDelete);
+                const updatedSitesConfig = {
+                    ...sitesConfig,
+                    [selectedAdminAgency]: updatedSites
+                };
+                const sitesConfigDocPath = `artifacts/${appId}/admin_config/sites_list`;
+                // Use doc and setDoc functions directly
+                const sitesConfigDocRef = doc(db, sitesConfigDocPath);
+                try {
+                    await setDoc(sitesConfigDocRef, { sitesByAgency: updatedSitesConfig });
+                    setModalMessage(`Site "${siteToDelete}" deleted from "${selectedAdminAgency}".`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error deleting site:", e);
+                    setModalMessage(`Error deleting site: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleAddActivityType = async () => {
+                if (!adminActivityTypeInput.trim()) {
+                    setModalMessage("Activity type name cannot be empty.");
+                    setShowModal(true);
+                    return;
+                }
+                const newActivityType = {
+                    name: adminActivityTypeInput.trim(),
+                    critical: adminActivityTypeCritical
+                };
+                if (activityTypesConfig.some(type => type.name.toLowerCase() === newActivityType.name.toLowerCase())) {
+                    setModalMessage("Activity type with this name already exists.");
+                    setShowModal(true);
+                    return;
+                }
+                const updatedActivityTypes = [...activityTypesConfig, newActivityType];
+                const activityTypesConfigDocPath = `artifacts/${appId}/admin_config/activity_types_list`;
+                // Use doc and setDoc functions directly
+                const activityTypesConfigDocRef = doc(db, activityTypesConfigDocPath);
+                try {
+                    await setDoc(activityTypesConfigDocRef, { activityTypes: updatedActivityTypes });
+                    setAdminActivityTypeInput('');
+                    setAdminActivityTypeCritical(false);
+                    setModalMessage(`Activity type "${newActivityType.name}" added.`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error adding activity type:", e);
+                    setModalMessage(`Error adding activity type: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleDeleteActivityType = async (activityTypeToDeleteName) => {
+                const updatedActivityTypes = activityTypesConfig.filter(type => type.name !== activityTypeToDeleteName);
+                const activityTypesConfigDocPath = `artifacts/${appId}/admin_config/activity_types_list`;
+                // Use doc and setDoc functions directly
+                const activityTypesConfigDocRef = doc(db, activityTypesConfigDocPath);
+                try {
+                    await setDoc(activityTypesConfigDocRef, { activityTypes: updatedActivityTypes });
+                    setModalMessage(`Activity type "${activityTypeToDeleteName}" deleted.`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error deleting activity type:", e);
+                    setModalMessage(`Error deleting activity type: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleToggleActivityCritical = async (activityToToggle) => {
+                const updatedActivityTypes = activityTypesConfig.map(type =>
+                    type.name === activityToToggle.name
+                        ? { ...type, critical: !type.critical }
+                        : type
+                );
+                const activityTypesConfigDocPath = `artifacts/${appId}/admin_config/activity_types_list`;
+                // Use doc and setDoc functions directly
+                const activityTypesConfigDocRef = doc(db, activityTypesConfigDocPath);
+                try {
+                    await setDoc(activityTypesConfigDocRef, { activityTypes: updatedActivityTypes });
+                    setModalMessage(`Activity type "${activityToToggle.name}" critical status toggled.`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error toggling activity type critical status:", e);
+                    setModalMessage(`Error toggling critical status: ${e.message}`);
+                    setShowModal(true);
+                }
+            };
+
+            const handleExportSelectedData = async () => {
+                if (!selectedExportAgency || !selectedExportSite) {
+                    setModalMessage("Please select both an Agency and a Site for export.");
+                    setShowModal(true);
+                    return;
+                }
+                setIsExporting(true);
+                setModalMessage("Exporting data... Please wait.");
+                setShowModal(true);
+                try {
+                    // Use query, collectionGroup, where, and getDocs functions directly
+                    const activitiesQuery = query(
+                        collectionGroup(db, 'activities'),
+                        where('agency', '==', selectedExportAgency),
+                        where('site', '==', selectedExportSite)
+                    );
+                    const querySnapshot = await getDocs(activitiesQuery);
+                    const activitiesToExport = querySnapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    if (activitiesToExport.length === 0) {
+                        setModalMessage("No activities found for the selected Agency and Site.");
+                        setShowModal(true);
+                        setIsExporting(false);
+                        return;
+                    }
+                    const activityCriticalMap = new Map();
+                    activityTypesConfig.forEach(type => {
+                        activityCriticalMap.set(type.name, type.critical);
+                    });
+                    const headers = ['Agency', 'Site', 'Activity', 'Critical Status', 'Timestamp (Milliseconds)', 'Logged At', 'User ID (Internal)'];
+                    const rows = activitiesToExport.map(activity => [
+                        activity.agency,
+                        activity.site,
+                        activity.activity,
+                        activityCriticalMap.get(activity.activity) ? 'Yes' : 'No',
+                        activity.timestamp,
+                        activity.loggedAt,
+                        activity.userId || 'N/A'
+                    ]);
+                    let csvContent = headers.join(',') + '\n';
+                    rows.forEach(row => {
+                        csvContent += row.map(e => `"${String(e).replace(/"/g, '""')}"`).join(',') + '\n';
+                    });
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.setAttribute('download', `activities_${selectedExportAgency.replace(/\s/g, '_')}_${selectedExportSite.replace(/\s/g, '_')}_export.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    setModalMessage(`Export complete! Downloaded ${activitiesToExport.length} activities.`);
+                    setShowModal(true);
+                } catch (e) {
+                    console.error("Error exporting data:", e);
+                    setModalMessage(`Error during export: ${e.message}. Please ensure Firestore rules and indexes are correctly set up.`);
+                    setShowModal(true);
+                } finally {
+                    setIsExporting(false);
+                }
+            };
+
+            const Modal = ({ message, onClose }) => (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full text-center">
+                        <p className="text-lg font-semibold text-gray-800 mb-4">{message}</p>
+                        <button
+                            onClick={onClose}
+                            className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 ease-in-out"
+                        >
+                            OK
+                        </button>
+                    </div>
+                </div>
+            );
+
+            if (!isAuthReady) {
+                return (
+                    <div className="flex items-center justify-center min-h-screen bg-gray-100">
+                        <div className="text-xl font-semibold text-gray-700">Loading application...</div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex flex-col items-center py-10 px-4 font-inter">
+                    {showModal && <Modal message={modalMessage} onClose={() => setShowModal(false)} />}
+
+                    <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-4xl mb-8">
+                        <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center">Daily Activity Tracker</h1>
+
+                        {!isAdminMode ? (
+                            <div className="mb-6 p-4 border border-blue-200 rounded-lg bg-blue-50">
+                                <label htmlFor="agency-code-input" className="block text-blue-800 text-sm font-semibold mb-2">
+                                    Enter Agency Code to begin:
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        id="agency-code-input"
+                                        value={agencyCodeInput}
+                                        onChange={(e) => setAgencyCodeInput(e.target.value)}
+                                        onKeyPress={(e) => { if (e.key === 'Enter') handleAgencyCodeSubmit(); }}
+                                        placeholder="e.g., CODEA"
+                                        className="flex-grow px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    />
+                                    <button
+                                        onClick={handleAgencyCodeSubmit}
+                                        className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 ease-in-out"
+                                    >
+                                        Apply Code
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="mb-6 p-4 border border-purple-200 rounded-lg bg-purple-50 flex justify-between items-center">
+                                <p className="text-purple-800 text-lg font-semibold">
+                                    Admin Mode Active
+                                </p>
+                                <button
+                                    onClick={() => { setIsAdminMode(false); clearAgencyCode(); }}
+                                    className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition duration-150 ease-in-out text-sm"
+                                >
+                                    Exit Admin Mode
+                                </button>
+                            </div>
+                        )}
+
+                        {isAdminMode && (
+                            <div className="mb-8 p-6 border border-gray-300 rounded-lg bg-gray-50">
+                                <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Admin Panel</h2>
+
+                                <div className="mb-6 border-b pb-4">
+                                    <h3 className="text-xl font-semibold text-gray-700 mb-3">Manage Agencies & Codes</h3>
+                                    <div className="flex gap-2 mb-4">
+                                        <input
+                                            type="text"
+                                            placeholder="Agency Name"
+                                            value={adminAgencyNameInput}
+                                            onChange={(e) => setAdminAgencyNameInput(e.target.value)}
+                                            className="flex-grow px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Agency Code (e.g., CODE1)"
+                                            value={adminAgencyCodeInput}
+                                            onChange={(e) => setAdminAgencyCodeInput(e.target.value)}
+                                            className="flex-grow px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                                        />
+                                        <button
+                                            onClick={handleAddUpdateAgency}
+                                            className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                                        >
+                                            Add/Update Agency
+                                        </button>
+                                    </div>
+                                    <ul className="list-disc pl-5">
+                                        {agenciesConfig.map((agency) => (
+                                            <li key={agency.code} className="flex justify-between items-center py-1">
+                                                <span className="text-gray-700">{agency.name} (Code: {agency.code})</span>
+                                                <button
+                                                    onClick={() => handleDeleteAgency(agency)}
+                                                    className="ml-4 px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 text-sm"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+
+                                <div className="mb-6 border-b pb-4">
+                                    <h3 className="text-xl font-semibold text-gray-700 mb-3">Manage Sites per Agency</h3>
+                                    <div className="relative mb-4">
+                                        <select
+                                            value={selectedAdminAgency}
+                                            onChange={(e) => {
+                                                setSelectedAdminAgency(e.target.value);
+                                            }}
+                                            className="block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none pr-8"
+                                        >
+                                            <option value="">-- Select Agency to Manage Sites --</option>
+                                            {agenciesConfig.map((agency) => (
+                                                <option key={agency.code} value={agency.name}>
+                                                    {agency.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                                                <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                                            </svg>
+                                        </div>
+                                    </div>
+
+                                    {selectedAdminAgency && (
+                                        <div className="mt-4">
+                                            <h4 className="text-lg font-medium text-gray-600 mb-2">Sites for {selectedAdminAgency}:</h4>
+                                            <div className="flex gap-2 mb-4">
+                                                <input
+                                                    type="text"
+                                                    placeholder="New Site Name"
+                                                    value={adminSiteInput}
+                                                    onChange={(e) => {
+                                                        setAdminSiteInput(e.target.value);
+                                                    }}
+                                                    className="flex-grow px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                                                />
+                                                <button
+                                                    onClick={handleAddSite}
+                                                    className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                                >
+                                                    Add Site
+                                                </button>
+                                            </div>
+                                            <ul className="list-disc pl-5">
+                                                {(sitesConfig[selectedAdminAgency] || []).map((site) => (
+                                                    <li key={site} className="flex justify-between items-center py-1">
+                                                        <span className="text-gray-700">{site}</span>
+                                                        <button
+                                                            onClick={() => handleDeleteSite(site)}
+                                                            className="ml-4 px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 text-sm"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mb-6 border-b pb-4">
+                                    <h3 className="text-xl font-semibold text-gray-700 mb-3">Manage Activity Types</h3>
+                                    <div className="flex flex-col sm:flex-row gap-2 mb-4 items-start sm:items-center">
+                                        <input
+                                            type="text"
+                                            placeholder="New Activity Type (e.g., 'Reporting')"
+                                            value={adminActivityTypeInput}
+                                            onChange={(e) => setAdminActivityTypeInput(e.target.value)}
+                                            className="flex-grow px-4 py-2 border border-gray-300 rounded-md shadow-sm w-full sm:w-auto"
+                                        />
+                                        <label className="flex items-center space-x-2 text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={adminActivityTypeCritical}
+                                                onChange={(e) => setAdminActivityTypeCritical(e.target.checked)}
+                                                className="form-checkbox h-5 w-5 text-purple-600 rounded-md"
+                                            />
+                                            <span>Critical</span>
+                                        </label>
+                                        <button
+                                            onClick={handleAddActivityType}
+                                            className="px-6 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 w-full sm:w-auto"
+                                        >
+                                            Add Activity Type
+                                        </button>
+                                    </div>
+                                    <ul className="list-disc pl-5">
+                                        {activityTypesConfig.map((activity) => (
+                                            <li key={activity.name} className="flex justify-between items-center py-1">
+                                                <span className="text-gray-700 flex items-center">
+                                                    {activity.name}
+                                                    <label className="ml-3 flex items-center space-x-1 text-sm">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={activity.critical}
+                                                            onChange={() => handleToggleActivityCritical(activity)}
+                                                            className="form-checkbox h-4 w-4 text-blue-600 rounded-md"
+                                                        />
+                                                        <span>Critical</span>
+                                                    </label>
+                                                </span>
+                                                <button
+                                                    onClick={() => handleDeleteActivityType(activity.name)}
+                                                    className="ml-4 px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 text-sm"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+
+                                <div className="mb-6">
+                                    <h3 className="text-xl font-semibold text-gray-700 mb-3">Data Export Tool</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <div className="relative">
+                                            <label htmlFor="export-agency-select" className="block text-gray-600 text-sm font-medium mb-1">
+                                                Select Agency for Export:
+                                            </label>
+                                            <select
+                                                id="export-agency-select"
+                                                value={selectedExportAgency}
+                                                onChange={(e) => {
+                                                    setSelectedExportAgency(e.target.value);
+                                                    setSelectedExportSite('');
+                                                }}
+                                                className="block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none pr-8"
+                                            >
+                                                <option value="">-- Choose Agency --</option>
+                                                {agenciesConfig.map((agency) => (
+                                                    <option key={agency.code} value={agency.name}>
+                                                        {agency.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                                                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                                                </svg>
+                                            </div>
+                                        </div>
+
+                                        <div className="relative">
+                                            <label htmlFor="export-site-select" className="block text-gray-600 text-sm font-medium mb-1">
+                                                Select Site for Export:
+                                            </label>
+                                            <select
+                                                id="export-site-select"
+                                                value={selectedExportSite}
+                                                onChange={(e) => setSelectedExportSite(e.target.value)}
+                                                disabled={!selectedExportAgency}
+                                                className="block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none pr-8 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                                            >
+                                                <option value="">-- Choose Site --</option>
+                                                {selectedExportAgency && sitesConfig[selectedExportAgency]?.map((site) => (
+                                                    <option key={site} value={site}>
+                                                        {site}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                                                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={handleExportSelectedData}
+                                        disabled={!selectedExportAgency || !selectedExportSite || isExporting}
+                                        className={`w-full px-6 py-3 rounded-lg shadow-md text-lg font-semibold transition duration-150 ease-in-out
+                                          ${!selectedExportAgency || !selectedExportSite || isExporting
+                                            ? 'bg-gray-400 text-gray-700 cursor-not-allowed'
+                                            : 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50'
+                                          }`}
+                                    >
+                                        {isExporting ? 'Exporting...' : 'Export Selected Data'}
+                                    </button>
+                                    <p className="text-sm text-gray-600 mt-2 text-center">
+                                        Exports activities for the selected agency and site across all users.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {isAgencySetByCode && !isAdminMode && (
+                            <>
+                                <div className="mb-6 p-4 border border-green-200 rounded-lg bg-green-50 flex justify-between items-center">
+                                    <p className="text-green-800 text-lg font-semibold">
+                                        Agency: <span className="font-bold">{selectedAgency}</span>
+                                    </p>
+                                    <button
+                                        onClick={clearAgencyCode}
+                                        className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-opacity-50 transition duration-150 ease-in-out text-sm"
+                                    >
+                                        Change Agency Code
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-6 mb-8">
+                                    <div>
+                                        <label htmlFor="site-select" className="block text-gray-700 text-sm font-semibold mb-2">
+                                            Select Site:
+                                        </label>
+                                        <div className="relative">
+                                            <select
+                                                id="site-select"
+                                                value={selectedSite}
+                                                onChange={(e) => setSelectedSite(e.target.value)}
+                                                disabled={!selectedAgency}
+                                                className="block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none pr-8 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                                            >
+                                                <option value="">-- Choose Site --</option>
+                                                {selectedAgency && sitesConfig[selectedAgency]?.map((site) => (
+                                                    <option key={site} value={site}>
+                                                        {site}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                                                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="mb-6">
+                                    <label className="block text-gray-700 text-sm font-semibold mb-3">
+                                        What are you doing?
+                                    </label>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
+                                        {activityTypesConfig.map((activity) => (
+                                            <button
+                                                key={activity.name}
+                                                onClick={() => {
+                                                    setActivityType(activity.name);
+                                                    setOtherActivityText('');
+                                                }}
+                                                className={`px-4 py-2 rounded-md transition duration-150 ease-in-out
+                                                  ${activityType === activity.name
+                                                    ? 'bg-blue-600 text-white shadow-md'
+                                                    : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                                                  }
+                                                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50`}
+                                            >
+                                                {activity.name}
+                                            </button>
+                                        ))}
+                                        <button
+                                            onClick={() => setActivityType('Other')}
+                                            className={`px-4 py-2 rounded-md transition duration-150 ease-in-out
+                                                ${activityType === 'Other'
+                                                  ? 'bg-blue-600 text-white shadow-md'
+                                                  : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                                                }
+                                                focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50`}
+                                        >
+                                            Other
+                                        </button>
+                                    </div>
+
+                                    {activityType === 'Other' && (
+                                        <textarea
+                                            value={otherActivityText}
+                                            onChange={(e) => setOtherActivityText(e.target.value)}
+                                            placeholder="Describe your activity..."
+                                            className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mt-2"
+                                            rows="3"
+                                        ></textarea>
+                                    )}
+                                </div>
+
+                                <div className="flex justify-center">
+                                    <button
+                                        onClick={logActivity}
+                                        className="bg-green-600 text-white px-8 py-3 rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition duration-150 ease-in-out text-lg font-semibold"
+                                        disabled={!selectedAgency || !selectedSite || (!activityType && !otherActivityText)}
+                                    >
+                                        Log Activity
+                                    </button>
+                                </div>
+                                <div className="flex justify-center mt-6">
+                                    <button
+                                        onClick={handleLogout}
+                                        className="bg-gray-500 text-white px-8 py-3 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-opacity-50 transition duration-150 ease-in-out text-lg font-semibold"
+                                    >
+                                        Log Out
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    {(isAgencySetByCode && !isAdminMode) && (
+                        <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-4xl">
+                            <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Your Logged Activities</h2>
+                            {loggedActivities.length === 0 ? (
+                                <p className="text-gray-600 text-center">No activities logged yet for this agency and site.</p>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tl-lg">
+                                                    Agency
+                                                </th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                    Site
+                                                </th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                    Activity
+                                                </th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tr-lg">
+                                                    Logged At
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {loggedActivities.map((activity) => (
+                                                <tr key={activity.id}>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                        {activity.agency}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                        {activity.site}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                        {activity.activity}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                        {activity.loggedAt}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Render the App component
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
